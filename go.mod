@@ -1,3 +1,3 @@
-module github.com/jeroenmoors/spartacus
+module github.com/jeroenmoors/sparcus
 
 go 1.23.3
