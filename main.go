@@ -1,8 +1,10 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +16,11 @@ import (
 	"syscall"
 	"time"
 )
+
+// Embed de templates map
+//
+//go:embed html/*
+var htmlFS embed.FS
 
 type Config struct {
 	HandlersPath string
@@ -97,10 +104,73 @@ func main() {
 
 	http.HandleFunc("/set/", setHandler)
 	http.HandleFunc("/get/", getHandler)
+	http.HandleFunc("/", adminHandler)
+
 	fmt.Println("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		fmt.Println("Error starting server:", err)
 	}
+}
+
+func adminHandler(w http.ResponseWriter, r *http.Request) {
+	var tmpl *template.Template
+	var err error
+	fmt.Println("HTTP Request for", r.URL.Path)
+	if r.URL.Path == "/" {
+		tmpl = template.Must(template.ParseFS(htmlFS, "html/index.html"))
+		err = tmpl.Execute(w, nil)
+		if err != nil {
+			http.Error(w, "Error rendering page: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if r.URL.Path == "/ajax/status" {
+		w.Header().Set("Content-Type", "application/json")
+		data := struct {
+			Values     map[string][]float64 `json:"values"`
+			Timestamps map[string]int64     `json:"timestamps"`
+		}{
+			Values: values,
+			Timestamps: func() map[string]int64 {
+				ts := make(map[string]int64)
+				for k, v := range timestamps {
+					ts[k] = v.Unix()
+				}
+				return ts
+			}(),
+		}
+		encoder := json.NewEncoder(w)
+		if err := encoder.Encode(data); err != nil {
+			http.Error(w, "Error encoding data to JSON: "+err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	content, err := htmlFS.ReadFile("html" + r.URL.Path)
+	if err == nil {
+		switch filepath.Ext(r.URL.Path) {
+		case ".html":
+			w.Header().Set("Content-Type", "text/html")
+		case ".css":
+			w.Header().Set("Content-Type", "text/css")
+		case ".js":
+			w.Header().Set("Content-Type", "application/javascript")
+		case ".png":
+			w.Header().Set("Content-Type", "image/png")
+		case ".jpg", ".jpeg":
+			w.Header().Set("Content-Type", "image/jpeg")
+		case ".gif":
+			w.Header().Set("Content-Type", "image/gif")
+		default:
+			w.Header().Set("Content-Type", "application/octet-stream")
+		}
+	}
+	if err != nil {
+		http.Error(w, "Page not found", http.StatusNotFound)
+		return
+	}
+	w.Write(content)
 }
 
 func getHandler(w http.ResponseWriter, r *http.Request) {

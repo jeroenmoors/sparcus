@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sparcus</title>
+  <link href="/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .navbar {
+      background-color: #28a745; /* Bootstrap green */
+    }
+    .navbar-brand {
+      color: white !important;
+      font-weight: bold;
+    }
+    .sort-icon {
+      cursor: pointer;
+      margin-left: 5px;
+    }
+    .sort-icon.active {
+      color: #28a745;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Fixed Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="#">Sparcus</a>
+    </div>
+  </nav>
+
+  <!-- Content -->
+  <div class="container" style="margin-top: 80px;">
+    <ul class="nav nav-tabs" id="sparcusTabs" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="status-tab" data-bs-toggle="tab" data-bs-target="#status" type="button" role="tab" aria-controls="status" aria-selected="true">Status</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="events-tab" data-bs-toggle="tab" data-bs-target="#events" type="button" role="tab" aria-controls="events" aria-selected="false">Events</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="config-tab" data-bs-toggle="tab" data-bs-target="#config" type="button" role="tab" aria-controls="config" aria-selected="false">Config</button>
+      </li>
+    </ul>
+
+    <div class="tab-content mt-3" id="sparcusTabsContent">
+      <!-- Status Tab -->
+      <div class="tab-pane fade show active" id="status" role="tabpanel" aria-labelledby="status-tab">
+        <h3>Status</h3>
+        <div id="statusTable"></div>
+      </div>
+      
+      <!-- Events Tab -->
+      <div class="tab-pane fade" id="events" role="tabpanel" aria-labelledby="events-tab">
+        <h3>Events</h3>
+        <p>Here you can view the recent events.</p>
+      </div>
+      
+      <!-- Config Tab -->
+      <div class="tab-pane fade" id="config" role="tabpanel" aria-labelledby="config-tab">
+        <h3>Config</h3>
+        <p>Here you can configure the system settings.</p>
+      </div>
+    </div>
+  </div>
+<script src="/jquery-3.6.0.min.js"></script>
+<script>
+    $(document).ready(function() {
+        loadStatus();
+        $('a[data-bs-toggle="tab"]').on('shown.bs.tab', function (e) {
+            if (e.target.id === 'status-tab') {
+                loadStatus();
+            }
+        });
+    });
+
+    function loadStatus() {
+        $.ajax({
+            url: '/ajax/status',
+            method: 'GET',
+            dataType: 'json',
+            success: function(data) {
+                var statusTable = '<table class="table table-striped">';
+                statusTable += '<thead>';
+                statusTable += '<tr>';
+                statusTable += '<th>Key <i class="sort-icon" data-column="1" data-order="asc">▲</i><i class="sort-icon" data-column="1" data-order="desc">▼</i></th>';
+                statusTable += '<th>Value <i class="sort-icon" data-column="2" data-order="asc">▲</i><i class="sort-icon" data-column="2" data-order="desc">▼</i></th>';
+                statusTable += '<th>Last Updated <i class="sort-icon" data-column="3" data-order="asc">▲</i><i class="sort-icon" data-column="3" data-order="desc">▼</i></th>';
+                statusTable += '</tr>';
+                statusTable += '</thead>';
+                statusTable += '<tbody>';
+                if (typeof data.values === 'object') {
+                    Object.keys(data.values).forEach(function(key) {
+                        statusTable += '<tr>';
+                        statusTable += '<td>' + key + '</td>';
+                        statusTable += '<td class="text-end">' + data.values[key][0] + '</td>';
+                        if (data.timestamps[key] === null) {
+                            statusTable += '<td>Unknown</td>';
+                        } else {
+                            var date = new Date(data.timestamps[key] * 1000);
+                            var formattedDate = date.getFullYear() + '-' +
+                                ('0' + (date.getMonth() + 1)).slice(-2) + '-' +
+                                ('0' + date.getDate()).slice(-2) + ' ' +
+                                ('0' + date.getHours()).slice(-2) + ':' +
+                                ('0' + date.getMinutes()).slice(-2) + ':' +
+                                ('0' + date.getSeconds()).slice(-2);
+                            statusTable += '<td>' + formattedDate + '</td>';
+                        }
+                        statusTable += '</tr>';
+                    });
+                } else {
+                    $('#statusTable').html('<p>Invalid data format.</p>');
+                }
+                statusTable += '</tbody></table>';
+                $('#statusTable').html(statusTable);
+
+                $('.sort-icon').on('click', function() {
+                    const column = parseInt($(this).data('column'), 10); // Get the column index
+                    const order = $(this).data('order'); // Get the sort order (asc/desc)
+
+                    // Get all rows and sort them
+                    const rows = $('table tbody tr').toArray();
+                    rows.sort(function(a, b) {
+                    const aText = $(a).find(`td:nth-child(${column})`).text();
+                    const bText = $(b).find(`td:nth-child(${column})`).text();
+
+                    // Compare numbers or strings
+                    if ($.isNumeric(aText) && $.isNumeric(bText)) {
+                        return order === 'asc' ? aText - bText : bText - aText;
+                    } else {
+                        return order === 'asc' ? aText.localeCompare(bText) : bText.localeCompare(aText);
+                    }
+                    });
+
+                    // Append sorted rows back to the table body
+                    $('table tbody').empty().append(rows);
+
+                    // Highlight the active sort icon
+                    $('.sort-icon').removeClass('active');
+                    $(this).addClass('active');
+                });
+            },
+            error: function() {
+                $('#statusTable').html('<p>Error fetching status data.</p>');
+            }
+        });
+    }
+</script>
+  <script src="/bootstrap.bundle.min.js"></script>
+</body>
+</html>
