@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -44,6 +45,12 @@ type Event struct {
 	Timestamp time.Time `json:"timestamp"`
 	STDOUT    string    `json:"stdout"`
 	STDERR    string    `json:"stderr"`
+}
+
+type Executable struct {
+	Path        string `json:"path"`
+	Script      string `json:"script"`
+	Description string `json:"description"`
 }
 
 var config Config
@@ -187,6 +194,17 @@ func adminHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/ajax/handlers" {
+		w.Header().Set("Content-Type", "application/json")
+		jsonData, err := json.Marshal(scanForExecutables())
+		if err != nil {
+			http.Error(w, "Error encoding JSON: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Write(jsonData)
+		return
+	}
+
 	content, err := htmlFS.ReadFile("html" + r.URL.Path)
 	if err == nil {
 		switch filepath.Ext(r.URL.Path) {
@@ -300,7 +318,7 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	executables, err := scanForExecutables(config.HandlersPath, uri)
+	executables, err := scanForExecutablesInPath(config.HandlersPath, uri)
 	if err != nil {
 		fmt.Println("Error scanning for executables:", err)
 		return
@@ -410,7 +428,7 @@ func getKeyTimestamp(key string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("key not found: %s", key)
 }
 
-func scanForExecutables(basePath string, uri string) ([]string, error) {
+func scanForExecutablesInPath(basePath string, uri string) ([]string, error) {
 	var executables []string
 	err := filepath.Walk(
 		basePath,
@@ -440,6 +458,69 @@ func scanForExecutables(basePath string, uri string) ([]string, error) {
 		return nil, err
 	}
 	return executables, nil
+}
+
+func scanForExecutables() []Executable {
+	var executables []Executable
+	err := filepath.Walk(
+		config.HandlersPath,
+		func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+
+			if info.Mode()&0111 != 0 {
+				fmt.Println("Found executable:", path)
+				description := readDescription(path)
+				pathDirectory := filepath.Dir(path)
+				pathDirectory = strings.TrimPrefix(pathDirectory, config.HandlersPath)
+				pathFile := filepath.Base(path)
+				executables = append(executables, Executable{Path: pathDirectory, Script: pathFile, Description: description})
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		fmt.Println("Error scanning for executables:", err)
+	}
+	return executables
+}
+
+func readDescription(path string) string {
+	var description string
+	description = ""
+
+	file, err := os.Open(path)
+	if err != nil {
+		return "error reading script file"
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	var inComment bool
+	inComment = false
+	for i := 0; i < 20; i++ {
+		line, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			break
+		}
+		if strings.Contains(line, "*/") && inComment {
+			inComment = false
+		}
+		if inComment {
+			if idx := strings.Index(line, "*"); idx != -1 {
+				description += strings.TrimSpace(line[idx+1:])
+			}
+		}
+		if strings.Contains(line, "/*") {
+			inComment = true
+		}
+
+	}
+	return description
 }
 
 func graphiteSend(key string, value string) error {

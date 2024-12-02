@@ -41,6 +41,9 @@
         <button class="nav-link" id="events-tab" data-bs-toggle="tab" data-bs-target="#events" type="button" role="tab" aria-controls="events" aria-selected="false">Events</button>
       </li>
       <li class="nav-item" role="presentation">
+        <button class="nav-link" id="handlers-tab" data-bs-toggle="tab" data-bs-target="#handlers" type="button" role="tab" aria-controls="handlers" aria-selected="false">Handlers</button>
+      </li>
+      <li class="nav-item" role="presentation">
         <button class="nav-link" id="config-tab" data-bs-toggle="tab" data-bs-target="#config" type="button" role="tab" aria-controls="config" aria-selected="false">Config</button>
       </li>
     </ul>
@@ -57,7 +60,13 @@
         <h3>Events</h3>
         <div id="eventsTable"></div>
       </div>
-      
+  
+      <!-- Handlers Tab -->
+      <div class="tab-pane fade" id="handlers" role="tabpanel" aria-labelledby="handlers-tab">
+        <h3>Handlers</h3>
+        <div id="handlersTable"></div>
+      </div>
+
       <!-- Config Tab -->
       <div class="tab-pane fade" id="config" role="tabpanel" aria-labelledby="config-tab">
         <h3>Config</h3>
@@ -76,6 +85,9 @@
             if (e.target.id === 'events-tab') {
                 loadEvents();
             }
+            if (e.target.id === 'handlers-tab') {
+                loadHandlers();
+            }
         });
     });
 
@@ -89,10 +101,6 @@
                 eventsTable += '<thead>';
                 eventsTable += '<tr>';
                 eventsTable += '<th>Timestamp</th>';
-                eventsTable += '<th>Uri</th>';
-                eventsTable += '<th>Script</th>';
-                eventsTable += '<th>Output</th>';
-                eventsTable += '</tr>';
                 eventsTable = '';
                 if (typeof data === 'object') {
                     eventsTable += '<div class="accordion" id="eventsAccordion">';
@@ -194,6 +202,38 @@
                 $('#statusTable').html('<p>Error fetching status data.</p>');
             }
         });
+    }
+
+    function loadHandlers() {
+        $.ajax({
+            url: '/ajax/handlers',
+            method: 'GET',
+            dataType: 'json',
+            success: function(data) {
+                var handlersTable = '<table class="table table-striped">';
+                handlersTable += '<thead>';
+                handlersTable += '<tr>';
+                handlersTable += '<th>Path</th>';
+                handlersTable += '<th>Script</th>';
+                handlersTable += '<th>Description</th>';
+                handlersTable += '</tr>';
+                handlersTable += '</thead>';
+                handlersTable += '<tbody>';
+                if (typeof data === 'object') {
+                    data.forEach(function(handler) {
+                        handlersTable += '<tr>';
+                        handlersTable += '<td>' + handler['path'] + '</td>';
+                        handlersTable += '<td>' + handler['script'] + '</td>';
+                        handlersTable += '<td>' + handler['description'] + '</td>';
+                        handlersTable += '</tr>';
+                    });
+                } else {
+                    $('#handlersTable').html('<p>Invalid data format.</p>');
+                }
+                handlersTable += '</tbody></table>';
+                $('#handlersTable').html(handlersTable);
+            }});
+
     }
 </script>
   <script src="/bootstrap.bundle.min.js"></script>
