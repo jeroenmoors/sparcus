@@ -91,23 +91,23 @@
                 statusTable += '</tr>';
                 statusTable += '</thead>';
                 statusTable += '<tbody>';
-                if (typeof data.values === 'object') {
-                    Object.keys(data.values).forEach(function(key) {
+                if (typeof data === 'object') {
+                    Object.keys(data).forEach(function(key) {
                         statusTable += '<tr>';
                         statusTable += '<td>' + key + '</td>';
-                        statusTable += '<td class="text-end">' + data.values[key][0] + '</td>';
-                        if (data.timestamps[key] === null) {
-                            statusTable += '<td>Unknown</td>';
+                        if (Array.isArray(data[key]['numbers']) && data[key]['numbers'].length > 0) {
+                            statusTable += '<td class="text-end">' + data[key]['numbers'][0] + '</td>';
                         } else {
-                            var date = new Date(data.timestamps[key] * 1000);
-                            var formattedDate = date.getFullYear() + '-' +
-                                ('0' + (date.getMonth() + 1)).slice(-2) + '-' +
-                                ('0' + date.getDate()).slice(-2) + ' ' +
-                                ('0' + date.getHours()).slice(-2) + ':' +
-                                ('0' + date.getMinutes()).slice(-2) + ':' +
-                                ('0' + date.getSeconds()).slice(-2);
-                            statusTable += '<td>' + formattedDate + '</td>';
+                            statusTable += '<td>' + data[key]['text'] + '</td>';
                         }
+                        var date = new Date(data[key]['timestamp']);
+                        var formattedDate = date.getFullYear() + '-' +
+                            ('0' + (date.getMonth() + 1)).slice(-2) + '-' +
+                            ('0' + date.getDate()).slice(-2) + ' ' +
+                            ('0' + date.getHours()).slice(-2) + ':' +
+                            ('0' + date.getMinutes()).slice(-2) + ':' +
+                            ('0' + date.getSeconds()).slice(-2);
+                        statusTable += '<td>' + formattedDate + '</td>';
                         statusTable += '</tr>';
                     });
                 } else {

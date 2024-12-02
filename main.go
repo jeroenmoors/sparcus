@@ -27,41 +27,51 @@ type Config struct {
 	DataFile     string
 }
 
+type Value struct {
+	Numbers   []float64 `json:"numbers"`
+	Text      string    `json:"text"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+type Event struct {
+	uri       string    `json:"uri"`
+	script    string    `json:"script"`
+	timestamp time.Time `json:"timestamp"`
+	stdout    string    `json:"stdout"`
+	stderr    string    `json:"stderr"`
+}
+
 var config Config
-var values map[string][]float64
-var timestamps map[string]time.Time
+var values map[string]Value
+var events []Event
 
 func init() {
-	values = make(map[string][]float64)
-	timestamps = make(map[string]time.Time)
-
+	values = make(map[string]Value)
 	config = Config{
 		HandlersPath: "/var/lib/sparcus/handlers",
 		DataFile:     "/var/lib/sparcus/data.json",
 	}
 	fmt.Println("Handlers path:", config.HandlersPath)
+	fmt.Println("Data file:", config.DataFile)
 }
 
 func shutdown() {
 	fmt.Println("Shutting down server...")
 	fmt.Println("Writing data to disk...")
+	data := map[string]interface{}{
+		"values": values,
+		"events": events,
+	}
 
 	file, err := os.Create(config.DataFile)
 	if err != nil {
-		fmt.Println("Error creating file:", err)
+		fmt.Println("Error creating data file:", err)
 		return
 	}
 	defer file.Close()
 
-	data := struct {
-		Values     map[string][]float64 `json:"values"`
-		Timestamps map[string]time.Time `json:"timestamps"`
-	}{
-		Values:     values,
-		Timestamps: timestamps,
-	}
-
 	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(data); err != nil {
 		fmt.Println("Error encoding data to JSON:", err)
 	}
@@ -77,27 +87,48 @@ func main() {
 		os.Exit(1)
 	}()
 
-	fmt.Println("Loading data...")
+	fmt.Println("Loading data from disk...")
 	file, err := os.Open(config.DataFile)
-	if err == nil {
+	if err != nil {
+		fmt.Println("Error opening data file:", err)
+	} else {
 		defer file.Close()
 		decoder := json.NewDecoder(file)
-		data := struct {
-			Values     map[string][]float64 `json:"values"`
-			Timestamps map[string]time.Time `json:"timestamps"`
-		}{}
+		data := map[string]interface{}{}
 		if err := decoder.Decode(&data); err != nil {
-			fmt.Println("Error decoding data from JSON:", err)
+			fmt.Println("Error decoding data file:", err)
 		} else {
-			if data.Values != nil {
-				values = data.Values
+			if v, ok := data["values"].(map[string]interface{}); ok {
+				for key, val := range v {
+					valueBytes, err := json.Marshal(val)
+					if err != nil {
+						fmt.Println("Error marshalling value:", err)
+						continue
+					}
+					var value Value
+					if err := json.Unmarshal(valueBytes, &value); err != nil {
+						fmt.Println("Error unmarshalling value:", err)
+						continue
+					}
+					values[key] = value
+				}
 			}
-			if data.Timestamps != nil {
-				timestamps = data.Timestamps
+			if e, ok := data["events"].([]interface{}); ok {
+				for _, event := range e {
+					eventBytes, err := json.Marshal(event)
+					if err != nil {
+						fmt.Println("Error marshalling event:", err)
+						continue
+					}
+					var evt Event
+					if err := json.Unmarshal(eventBytes, &evt); err != nil {
+						fmt.Println("Error unmarshalling event:", err)
+						continue
+					}
+					events = append(events, evt)
+				}
 			}
 		}
-	} else if !os.IsNotExist(err) {
-		fmt.Println("Error opening data.json:", err)
 	}
 
 	fmt.Println("Starting server...")
@@ -126,24 +157,15 @@ func adminHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Path == "/ajax/status" {
+		fmt.Println("Current values:", values)
+		fmt.Println("Current events:", events)
 		w.Header().Set("Content-Type", "application/json")
-		data := struct {
-			Values     map[string][]float64 `json:"values"`
-			Timestamps map[string]int64     `json:"timestamps"`
-		}{
-			Values: values,
-			Timestamps: func() map[string]int64 {
-				ts := make(map[string]int64)
-				for k, v := range timestamps {
-					ts[k] = v.Unix()
-				}
-				return ts
-			}(),
+		jsonData, err := json.Marshal(values)
+		if err != nil {
+			http.Error(w, "Error encoding JSON: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
-		encoder := json.NewEncoder(w)
-		if err := encoder.Encode(data); err != nil {
-			http.Error(w, "Error encoding data to JSON: "+err.Error(), http.StatusInternalServerError)
-		}
+		w.Write(jsonData)
 		return
 	}
 
@@ -174,7 +196,7 @@ func adminHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getHandler(w http.ResponseWriter, r *http.Request) {
-	var value float64
+	var value string
 	var err error
 	var query url.Values
 	var paramAverage string
@@ -185,8 +207,6 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	uri = strings.TrimPrefix(uri, "/get/")
 	uri = strings.ReplaceAll(uri, "/", ".")
 	fmt.Println("Modified URI:", uri)
-
-	w.WriteHeader(http.StatusOK)
 
 	query = r.URL.Query()
 	paramAverage = query.Get("average")
@@ -206,29 +226,33 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		value, err = getKeyAverage(uri, count)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 	}
 
-	timestamp := timestamps[uri].Unix()
+	timestamp := values[uri].Timestamp.Unix()
 	if paramFormat == "json" {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(fmt.Sprintf(`{"value": %f, "timestamp": %d}`, value, timestamp)))
+		w.Write([]byte(fmt.Sprintf(`{"value": %s, "timestamp": %d}`, value, timestamp)))
 		return
 	}
 
 	if paramFormat == "csv" {
 		w.Header().Set("Content-Type", "text/csv")
-		w.Write([]byte(fmt.Sprintf("%d,%f", timestamp, value)))
+		w.Write([]byte(fmt.Sprintf("%d,%s", timestamp, value)))
 		return
 	}
 
 	if paramFormat == "pipe" {
 		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte(fmt.Sprintf("%d|%f", timestamp, value)))
+		w.Write([]byte(fmt.Sprintf("%d|%s", timestamp, value)))
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(fmt.Sprintf("%f", value)))
+	w.Write([]byte(fmt.Sprintf("%s", value)))
 }
 
 func setHandler(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +269,7 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 	if paramValue == "" {
 		w.Write([]byte("Set: " + uriDotted + " no value provided"))
 		fmt.Println("Query parameter 'value' was not set")
+		setKey(uriDotted, "")
 	} else {
 		w.Write([]byte("Set: " + uriDotted + " to '" + paramValue + "'"))
 		fmt.Println("Query parameter 'value' was set to:", paramValue)
@@ -264,7 +289,7 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 		os.Setenv("EVENT_VALUE", paramValue)
 		os.Setenv("EVENT_PATH", uri)
 		os.Setenv("EVENT_PATH_DOTTED", uriDotted)
-		var val float64
+		var val string
 		val, err = getKeyAverage(uriDotted, 3)
 		os.Setenv("EVENT_VALUE_AVG_3", fmt.Sprintf("%f", val))
 		val, err = getKeyAverage(uriDotted, 5)
@@ -275,43 +300,64 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 		if err := exec.Command(executable).Run(); err != nil {
 			fmt.Println(`Error executing:`, err)
 		}
+
+		event := Event{
+			uri:       uri,
+			script:    executable,
+			timestamp: time.Now(),
+			stderr:    "",
+			stdout:    "",
+		}
+		events = append(events, event)
 	}
 }
 
 func setKey(key string, value string) error {
-	timestamps[key] = time.Now()
+	v := values[key]
+	v.Timestamp = time.Now()
 	val, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		fmt.Println("Invalid value for 'value':", value)
-		return err
+	if err == nil {
+		v.Numbers = append(v.Numbers, val)
+		if len(v.Numbers) > 10 {
+			v.Numbers = v.Numbers[1:]
+		}
+	} else {
+		fmt.Println("Non nummeric 'value':", value)
+		v.Text = value
 	}
-	values[key] = append(values[key], val)
-	if len(values[key]) > 10 {
-		values[key] = values[key][1:]
-	}
+	fmt.Println("Setting key:", key, "to:", value)
+	values[key] = v
 	return nil
 }
 
-func getKeyLatest(key string) (float64, error) {
-	if vals, ok := values[key]; ok && len(vals) > 0 {
-		return vals[len(vals)-1], nil
+func getKeyLatest(key string) (string, error) {
+	val, ok := values[key]
+	if ok && val.Text != "" {
+		return val.Text, nil
 	}
-	return 0, fmt.Errorf("key not found: %s", key)
+
+	if ok && len(val.Numbers) > 0 {
+		return fmt.Sprintf("%f", val.Numbers[len(val.Numbers)-1]), nil
+	}
+	return "", fmt.Errorf("key not found: %s", key)
 }
 
-func getKeyAverage(key string, count int) (float64, error) {
-	if vals, ok := values[key]; ok && len(vals) > 0 {
+func getKeyAverage(key string, count int) (string, error) {
+	val := values[key]
+	if len(val.Numbers) > 0 {
 		sum := 0.0
-		for i := len(vals) - 1; i >= 0 && i >= len(vals)-count; i-- {
-			sum += vals[i]
+		for i := len(val.Numbers) - 1; i >= 0 && i >= len(val.Numbers)-count; i-- {
+			sum += val.Numbers[i]
 		}
-		return sum / float64(count), nil
+		return fmt.Sprintf("%f", sum/float64(count)), nil
 	}
-	return 0, fmt.Errorf("key not found: %s", key)
+	return "", fmt.Errorf("key not found: %s", key)
 }
 
 func getKeyTimestamp(key string) (time.Time, error) {
-	if ts, ok := timestamps[key]; ok {
+	val, ok := values[key]
+	if ok {
+		ts := val.Timestamp
 		return ts, nil
 	}
 	return time.Time{}, fmt.Errorf("key not found: %s", key)
