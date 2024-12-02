@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,6 +27,9 @@ var htmlFS embed.FS
 type Config struct {
 	HandlersPath string
 	DataFile     string
+	MaxEvents    int
+	GraphiteHost string
+	GraphitePort int
 }
 
 type Value struct {
@@ -34,11 +39,11 @@ type Value struct {
 }
 
 type Event struct {
-	uri       string    `json:"uri"`
-	script    string    `json:"script"`
-	timestamp time.Time `json:"timestamp"`
-	stdout    string    `json:"stdout"`
-	stderr    string    `json:"stderr"`
+	URI       string    `json:"uri"`
+	Script    string    `json:"script"`
+	Timestamp time.Time `json:"timestamp"`
+	STDOUT    string    `json:"stdout"`
+	STDERR    string    `json:"stderr"`
 }
 
 var config Config
@@ -50,7 +55,11 @@ func init() {
 	config = Config{
 		HandlersPath: "/var/lib/sparcus/handlers",
 		DataFile:     "/var/lib/sparcus/data.json",
+		MaxEvents:    250,
+		GraphiteHost: "localhost",
+		GraphitePort: 2003,
 	}
+
 	fmt.Println("Handlers path:", config.HandlersPath)
 	fmt.Println("Data file:", config.DataFile)
 }
@@ -157,10 +166,19 @@ func adminHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Path == "/ajax/status" {
-		fmt.Println("Current values:", values)
-		fmt.Println("Current events:", events)
 		w.Header().Set("Content-Type", "application/json")
 		jsonData, err := json.Marshal(values)
+		if err != nil {
+			http.Error(w, "Error encoding JSON: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Write(jsonData)
+		return
+	}
+
+	if r.URL.Path == "/ajax/events" {
+		w.Header().Set("Content-Type", "application/json")
+		jsonData, err := json.Marshal(events)
 		if err != nil {
 			http.Error(w, "Error encoding JSON: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -270,10 +288,12 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Set: " + uriDotted + " no value provided"))
 		fmt.Println("Query parameter 'value' was not set")
 		setKey(uriDotted, "")
+		graphiteSend(uriDotted, "1")
 	} else {
 		w.Write([]byte("Set: " + uriDotted + " to '" + paramValue + "'"))
 		fmt.Println("Query parameter 'value' was set to:", paramValue)
 		setKey(uriDotted, paramValue)
+		graphiteSend(uriDotted, paramValue)
 	}
 
 	executables, err := scanForExecutables(config.HandlersPath, uri)
@@ -297,18 +317,41 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 		val, err = getKeyAverage(uriDotted, 10)
 		os.Setenv("EVENT_VALUE_AVG_10", fmt.Sprintf("%f", val))
 
-		if err := exec.Command(executable).Run(); err != nil {
-			fmt.Println(`Error executing:`, err)
+		cmd := exec.Command(executable)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			fmt.Println("Error creating StdoutPipe for Cmd:", err)
+			continue
+		}
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			fmt.Println("Error creating StderrPipe for Cmd:", err)
+			continue
+		}
+
+		if err := cmd.Start(); err != nil {
+			fmt.Println("Error starting Cmd:", err)
+			continue
+		}
+
+		stdoutBytes, _ := io.ReadAll(stdout)
+		stderrBytes, _ := io.ReadAll(stderr)
+
+		if err := cmd.Wait(); err != nil {
+			fmt.Println("Error waiting for Cmd:", err)
 		}
 
 		event := Event{
-			uri:       uri,
-			script:    executable,
-			timestamp: time.Now(),
-			stderr:    "",
-			stdout:    "",
+			URI:       uriDotted,
+			Script:    executable,
+			Timestamp: time.Now(),
+			STDOUT:    string(stdoutBytes),
+			STDERR:    string(stderrBytes),
 		}
 		events = append(events, event)
+		if len(events) > 250 {
+			events = events[len(events)-250:]
+		}
 	}
 }
 
@@ -393,4 +436,14 @@ func scanForExecutables(basePath string, uri string) ([]string, error) {
 		return nil, err
 	}
 	return executables, nil
+}
+
+func graphiteSend(key string, value string) error {
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", config.GraphiteHost, config.GraphitePort))
+	conn.Write([]byte(fmt.Sprintf("%s %s %d\n", key, value, time.Now().Unix())))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return nil
 }

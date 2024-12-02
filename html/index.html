@@ -55,7 +55,7 @@
       <!-- Events Tab -->
       <div class="tab-pane fade" id="events" role="tabpanel" aria-labelledby="events-tab">
         <h3>Events</h3>
-        <p>Here you can view the recent events.</p>
+        <div id="eventsTable"></div>
       </div>
       
       <!-- Config Tab -->
@@ -69,12 +69,60 @@
 <script>
     $(document).ready(function() {
         loadStatus();
-        $('a[data-bs-toggle="tab"]').on('shown.bs.tab', function (e) {
+        $('button[data-bs-toggle="tab"]').on('shown.bs.tab', function (e) {
             if (e.target.id === 'status-tab') {
                 loadStatus();
             }
+            if (e.target.id === 'events-tab') {
+                loadEvents();
+            }
         });
     });
+
+    function loadEvents() {
+        $.ajax({
+            url: '/ajax/events',
+            method: 'GET',
+            dataType: 'json',
+            success: function(data) {
+                var eventsTable = '<table class="table table-striped">';
+                eventsTable += '<thead>';
+                eventsTable += '<tr>';
+                eventsTable += '<th>Timestamp</th>';
+                eventsTable += '<th>Uri</th>';
+                eventsTable += '<th>Script</th>';
+                eventsTable += '<th>Output</th>';
+                eventsTable += '</tr>';
+                eventsTable = '';
+                if (typeof data === 'object') {
+                    eventsTable += '<div class="accordion" id="eventsAccordion">';
+                        data.reverse().forEach(function(event, index) {
+                        var date = new Date(event['timestamp']);
+                        var formattedDate = date.getFullYear() + '-' +
+                            ('0' + (date.getMonth() + 1)).slice(-2) + '-' +
+                            ('0' + date.getDate()).slice(-2) + ' ' +
+                            ('0' + date.getHours()).slice(-2) + ':' +
+                            ('0' + date.getMinutes()).slice(-2) + ':' +
+                            ('0' + date.getSeconds()).slice(-2);
+                        eventsTable += '<div class="accordion-item">';
+                        eventsTable += '<h2 class="accordion-header" id="heading' + index + '">';
+                        eventsTable += '<button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse' + index + '" aria-expanded="false" aria-controls="collapse' + index + '">';
+                        eventsTable += formattedDate + ' - ' + event['uri'] + ' - ' + event['script'];
+                        eventsTable += '</button>';
+                        eventsTable += '</h2>';
+                        eventsTable += '<div id="collapse' + index + '" class="accordion-collapse collapse" aria-labelledby="heading' + index + '" data-bs-parent="#eventsAccordion">';
+                        eventsTable += '<div class="accordion-body">';
+                        eventsTable += '<pre>' + event['stdout'] + '</pre>';
+                        eventsTable += '</div>';
+                        eventsTable += '</div>';
+                        eventsTable += '</div>';
+                    });
+                    eventsTable += '</div>';
+                    $('#eventsTable').html(eventsTable);
+                }
+            }
+        });
+    }
 
     function loadStatus() {
         $.ajax({
