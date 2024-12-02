@@ -288,12 +288,16 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Set: " + uriDotted + " no value provided"))
 		fmt.Println("Query parameter 'value' was not set")
 		setKey(uriDotted, "")
-		graphiteSend(uriDotted, "1")
+		if config.GraphiteHost != "" && config.GraphitePort != 0 {
+			graphiteSend(uriDotted, "1")
+		}
 	} else {
 		w.Write([]byte("Set: " + uriDotted + " to '" + paramValue + "'"))
 		fmt.Println("Query parameter 'value' was set to:", paramValue)
 		setKey(uriDotted, paramValue)
-		graphiteSend(uriDotted, paramValue)
+		if config.GraphiteHost != "" && config.GraphitePort != 0 {
+			graphiteSend(uriDotted, paramValue)
+		}
 	}
 
 	executables, err := scanForExecutables(config.HandlersPath, uri)
