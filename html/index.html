@@ -27,7 +27,7 @@
   <!-- Fixed Navbar -->
   <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
     <div class="container-fluid">
-      <a class="navbar-brand" href="#">Sparcus</a>
+      <a class="navbar-brand" href="#">Sparcus</a> <small class="text-white">{{.Version}}</small>
     </div>
   </nav>
 
@@ -70,8 +70,8 @@
       <!-- Config Tab -->
       <div class="tab-pane fade" id="config" role="tabpanel" aria-labelledby="config-tab">
         <h3>Config</h3>
-        <p>Here you can configure the system settings.</p>
-      </div>
+        <div id="configTable"></div>
+    </div>
     </div>
   </div>
 <script src="/jquery-3.6.0.min.js"></script>
@@ -87,6 +87,9 @@
             }
             if (e.target.id === 'handlers-tab') {
                 loadHandlers();
+            }
+            if (e.target.id === 'config-tab') {
+                loadConfig();
             }
         });
     });
@@ -232,8 +235,38 @@
                 }
                 handlersTable += '</tbody></table>';
                 $('#handlersTable').html(handlersTable);
-            }});
+            }
+        });
+    }
 
+    function loadConfig() {
+        $.ajax({
+            url: '/ajax/config',
+            method: 'GET',
+            dataType: 'json',
+            success: function(data) {
+                var configTable = '<table class="table table-striped">';
+                configTable += '<thead>';
+                configTable += '<tr>';
+                configTable += '<th>Key</th>';
+                configTable += '<th>Value</th>';
+                configTable += '</tr>';
+                configTable += '</thead>';
+                configTable += '<tbody>';
+                if (typeof data === 'object') {
+                    Object.keys(data).forEach(function(key) {
+                        configTable += '<tr>';
+                        configTable += '<td>' + key + '</td>';
+                        configTable += '<td>' + data[key] + '</td>';
+                        configTable += '</tr>';
+                    });
+                } else {
+                    $('#configTable').html('<p>Invalid data format.</p>');
+                }
+                configTable += '</tbody></table>';
+                $('#configTable').html(configTable);
+            }
+        });
     }
 </script>
   <script src="/bootstrap.bundle.min.js"></script>

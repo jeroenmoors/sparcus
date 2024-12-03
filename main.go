@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -26,12 +28,17 @@ import (
 var htmlFS embed.FS
 
 type Config struct {
-	HandlersPath string
-	DataFile     string
-	MaxEvents    int
-	GraphiteHost string
-	GraphitePort int
+	Port         string `json:"Port"`
+	User         string `json:"User"`
+	Group        string `json:"Group"`
+	HandlersPath string `json:"HandlersPath"`
+	DataFile     string `json:"DataFile"`
+	MaxEvents    int    `json:"MaxEvents"`
+	GraphiteHost string `json:"GraphiteHost"`
+	GraphitePort int    `json:"GraphitePort"`
 }
+
+var version = "0.1.3"
 
 type Value struct {
 	Numbers   []float64 `json:"numbers"`
@@ -59,12 +66,59 @@ var events []Event
 
 func init() {
 	values = make(map[string]Value)
+
 	config = Config{
+		Port:         "8080",
+		User:         "sparcus",
+		Group:        "sparcus",
 		HandlersPath: "/var/lib/sparcus/handlers",
 		DataFile:     "/var/lib/sparcus/data.json",
 		MaxEvents:    250,
 		GraphiteHost: "localhost",
 		GraphitePort: 2003,
+	}
+
+	configFile := "/etc/sparcus.conf"
+	if _, err := os.Stat(configFile); err == nil {
+		file, err := os.Open(configFile)
+		if err != nil {
+			fmt.Println("Error opening config file:", err)
+			return
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, " ", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key := strings.TrimSpace(parts[0])
+			key = strings.ToLower(key)
+			value := strings.TrimSpace(parts[1])
+			switch key {
+			case "port":
+				config.Port = value
+			case "handlerspath":
+				config.HandlersPath = value
+			case "datafile":
+				config.DataFile = value
+			case "maxevents":
+				config.MaxEvents, _ = strconv.Atoi(value)
+			case "graphitehost":
+				config.GraphiteHost = value
+			case "graphiteport":
+				config.GraphitePort, _ = strconv.Atoi(value)
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			fmt.Println("Error reading config file:", err)
+		}
 	}
 
 	fmt.Println("Handlers path:", config.HandlersPath)
@@ -148,15 +202,37 @@ func main() {
 	}
 
 	fmt.Println("Starting server...")
-
 	http.HandleFunc("/set/", setHandler)
 	http.HandleFunc("/get/", getHandler)
 	http.HandleFunc("/", adminHandler)
 
-	fmt.Println("Starting server on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	fmt.Println("Starting server on :" + config.Port)
+	if err := http.ListenAndServe(":"+config.Port, nil); err != nil {
 		fmt.Println("Error starting server:", err)
 	}
+
+	user, err := user.Lookup(config.User)
+	if err != nil {
+		log.Fatalf("Failed to lookup user: %v", err)
+	}
+	uid, err := strconv.Atoi(user.Uid)
+	if err != nil {
+		log.Fatalf("Failed to convert UID to integer: %v", err)
+	}
+	gid, err := strconv.Atoi(user.Gid)
+	if err != nil {
+		log.Fatalf("Failed to convert GID to integer: %v", err)
+	}
+
+	if err := syscall.Setgid(gid); err != nil { // Replace 1000 with your user's GID
+		log.Fatalf("Failed to drop privileges to gid %d: %v", gid, err)
+	}
+
+	if err := syscall.Setuid(uid); err != nil { // Replace 1000 with your user's UID
+		log.Fatalf("Failed to drop privileges to uid %d: %v", uid, err)
+	}
+
+	log.Println("Privileges dropped")
 }
 
 func adminHandler(w http.ResponseWriter, r *http.Request) {
@@ -164,8 +240,11 @@ func adminHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
 	fmt.Println("HTTP Request for", r.URL.Path)
 	if r.URL.Path == "/" {
+		data := map[string]interface{}{
+			"Version": version,
+		}
 		tmpl = template.Must(template.ParseFS(htmlFS, "html/index.html"))
-		err = tmpl.Execute(w, nil)
+		err = tmpl.Execute(w, data)
 		if err != nil {
 			http.Error(w, "Error rendering page: "+err.Error(), http.StatusInternalServerError)
 		}
@@ -197,6 +276,17 @@ func adminHandler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/ajax/handlers" {
 		w.Header().Set("Content-Type", "application/json")
 		jsonData, err := json.Marshal(scanForExecutables())
+		if err != nil {
+			http.Error(w, "Error encoding JSON: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Write(jsonData)
+		return
+	}
+
+	if r.URL.Path == "/ajax/config" {
+		w.Header().Set("Content-Type", "application/json")
+		jsonData, err := json.Marshal(config)
 		if err != nil {
 			http.Error(w, "Error encoding JSON: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -333,11 +423,11 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 		os.Setenv("EVENT_PATH_DOTTED", uriDotted)
 		var val string
 		val, err = getKeyAverage(uriDotted, 3)
-		os.Setenv("EVENT_VALUE_AVG_3", fmt.Sprintf("%f", val))
+		os.Setenv("EVENT_VALUE_AVG_3", val)
 		val, err = getKeyAverage(uriDotted, 5)
-		os.Setenv("EVENT_VALUE_AVG_5", fmt.Sprintf("%f", val))
+		os.Setenv("EVENT_VALUE_AVG_5", val)
 		val, err = getKeyAverage(uriDotted, 10)
-		os.Setenv("EVENT_VALUE_AVG_10", fmt.Sprintf("%f", val))
+		os.Setenv("EVENT_VALUE_AVG_10", val)
 
 		cmd := exec.Command(executable)
 		stdout, err := cmd.StdoutPipe()
