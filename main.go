@@ -331,6 +331,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Received request for:", r.URL.Path)
 	uri := r.URL.Path
 	uri = strings.TrimPrefix(uri, "/get/")
+	uri = strings.ToLower(uri)
 	uri = strings.ReplaceAll(uri, "/", ".")
 	fmt.Println("Modified URI:", uri)
 
@@ -385,6 +386,7 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Received request for:", r.URL.Path)
 	uri := r.URL.Path
 	uri = strings.TrimPrefix(uri, "/set/")
+	uri = strings.ToLower(uri)
 	uriDotted := strings.ReplaceAll(uri, "/", ".")
 	fmt.Println("Dotted URI:", uriDotted)
 
