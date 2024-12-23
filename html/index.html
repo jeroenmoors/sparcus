@@ -123,7 +123,10 @@
                         eventsTable += '</h2>';
                         eventsTable += '<div id="collapse' + index + '" class="accordion-collapse collapse" aria-labelledby="heading' + index + '" data-bs-parent="#eventsAccordion">';
                         eventsTable += '<div class="accordion-body">';
-                        eventsTable += '<pre>' + event['stdout'] + '</pre>';
+                        eventsTable += 'STDOUT:<br/><pre>' + event['stdout'] + '</pre>';
+                        if (event['stdout']) {
+                          eventsTable += 'STDERR:<br/><pre>' + event['stderr'] + '</pre>';
+                        }
                         eventsTable += '</div>';
                         eventsTable += '</div>';
                         eventsTable += '</div>';

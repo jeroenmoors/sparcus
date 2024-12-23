@@ -38,7 +38,7 @@ type Config struct {
 	GraphitePort int    `json:"GraphitePort"`
 }
 
-var version = "0.1.3"
+var version = "0.1.4"
 
 type Value struct {
 	Numbers   []float64 `json:"numbers"`
