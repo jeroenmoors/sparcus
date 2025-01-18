@@ -20,6 +20,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 // Embed de templates map
@@ -36,6 +38,10 @@ type Config struct {
 	MaxEvents    int    `json:"MaxEvents"`
 	GraphiteHost string `json:"GraphiteHost"`
 	GraphitePort int    `json:"GraphitePort"`
+	MQTTHost     string `json:"MqttHost"`
+	MQTTPort     int    `json:"MqttPort"`
+	MQTTUser     string `json:"MqttUser"`
+	MQTTPassword string `json:"MqttPassword"`
 }
 
 var version = "0.1.4"
@@ -61,6 +67,7 @@ type Executable struct {
 }
 
 var config Config
+var mqttClient mqtt.Client
 var values map[string]Value
 var events []Event
 
@@ -69,13 +76,12 @@ func init() {
 
 	config = Config{
 		Port:         "8080",
-		User:         "sparcus",
-		Group:        "sparcus",
 		HandlersPath: "/var/lib/sparcus/handlers",
 		DataFile:     "/var/lib/sparcus/data.json",
 		MaxEvents:    250,
 		GraphiteHost: "localhost",
 		GraphitePort: 2003,
+		MQTTPort:     1883,
 	}
 
 	configFile := "/etc/sparcus.conf"
@@ -103,6 +109,10 @@ func init() {
 			switch key {
 			case "port":
 				config.Port = value
+			case "user":
+				config.User = value
+			case "group":
+				config.Group = value
 			case "handlerspath":
 				config.HandlersPath = value
 			case "datafile":
@@ -113,6 +123,14 @@ func init() {
 				config.GraphiteHost = value
 			case "graphiteport":
 				config.GraphitePort, _ = strconv.Atoi(value)
+			case "mqtthost":
+				config.MQTTHost = value
+			case "mqttport":
+				config.MQTTPort, _ = strconv.Atoi(value)
+			case "mqttuser":
+				config.MQTTUser = value
+			case "mqttpassword":
+				config.MQTTPassword = value
 			}
 		}
 
@@ -206,33 +224,57 @@ func main() {
 	http.HandleFunc("/get/", getHandler)
 	http.HandleFunc("/", adminHandler)
 
+	if config.User == "" || config.Group == "" {
+		fmt.Println("Warning: User and Group must be defined to drop privileges")
+	} else {
+		user, err := user.Lookup(config.User)
+		if err != nil {
+			log.Fatalf("Failed to lookup user: %v", err)
+		}
+		uid, err := strconv.Atoi(user.Uid)
+		if err != nil {
+			log.Fatalf("Failed to convert UID to integer: %v", err)
+		}
+		gid, err := strconv.Atoi(user.Gid)
+		if err != nil {
+			log.Fatalf("Failed to convert GID to integer: %v", err)
+		}
+
+		if err := syscall.Setgid(gid); err != nil { // Replace 1000 with your user's GID
+			log.Fatalf("Failed to drop privileges to gid %d: %v", gid, err)
+		}
+
+		if err := syscall.Setuid(uid); err != nil { // Replace 1000 with your user's UID
+			log.Fatalf("Failed to drop privileges to uid %d: %v", uid, err)
+		}
+
+		log.Println("Privileges dropped")
+	}
+
+	if config.MQTTHost != "" {
+		log.Println("MQTT server configured, connecting...")
+		opts := mqtt.NewClientOptions().AddBroker(fmt.Sprintf("tcp://%s:%d", config.MQTTHost, config.MQTTPort))
+		if config.MQTTUser != "" {
+			opts.SetUsername(config.MQTTUser)
+			opts.SetPassword(config.MQTTPassword)
+		}
+
+		opts.SetClientID("sparcus")
+		mqttClient = mqtt.NewClient(opts)
+		if token := mqttClient.Connect(); token.Wait() && token.Error() != nil {
+			log.Fatalf("Failed to connect to MQTT server: %v", token.Error())
+		}
+		mqttClient.Subscribe("sparcus/#", 0, func(client mqtt.Client, msg mqtt.Message) {
+			fmt.Printf("Received message on topic: %s\nMessage: %s\n", msg.Topic(), msg.Payload())
+		})
+		defer mqttClient.Disconnect(250)
+		log.Println("Connected to MQTT server")
+	}
+
 	fmt.Println("Starting server on :" + config.Port)
 	if err := http.ListenAndServe(":"+config.Port, nil); err != nil {
 		fmt.Println("Error starting server:", err)
 	}
-
-	user, err := user.Lookup(config.User)
-	if err != nil {
-		log.Fatalf("Failed to lookup user: %v", err)
-	}
-	uid, err := strconv.Atoi(user.Uid)
-	if err != nil {
-		log.Fatalf("Failed to convert UID to integer: %v", err)
-	}
-	gid, err := strconv.Atoi(user.Gid)
-	if err != nil {
-		log.Fatalf("Failed to convert GID to integer: %v", err)
-	}
-
-	if err := syscall.Setgid(gid); err != nil { // Replace 1000 with your user's GID
-		log.Fatalf("Failed to drop privileges to gid %d: %v", gid, err)
-	}
-
-	if err := syscall.Setuid(uid); err != nil { // Replace 1000 with your user's UID
-		log.Fatalf("Failed to drop privileges to uid %d: %v", uid, err)
-	}
-
-	log.Println("Privileges dropped")
 }
 
 func adminHandler(w http.ResponseWriter, r *http.Request) {
@@ -410,6 +452,21 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Publish to MQTT
+	if mqttClient == nil {
+		fmt.Println("MQTT is not configured")
+	}
+	if mqttClient != nil && mqttClient.IsConnected() {
+		token := mqttClient.Publish("sparcus/"+uri, 0, false, paramValue)
+		token.Wait()
+		if token.Error() != nil {
+			fmt.Println("Error publishing to MQTT:", token.Error())
+		}
+	} else {
+		fmt.Println("MQTT is not configured or not connected to server")
+	}
+
+	// Find scripts in handlers path
 	executables, err := scanForExecutablesInPath(config.HandlersPath, uri)
 	if err != nil {
 		fmt.Println("Error scanning for executables:", err)
@@ -418,6 +475,7 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Println("Found executables:", executables)
 	}
 
+	// Execute scripts
 	for _, executable := range executables {
 		fmt.Println("Executing:", executable)
 		os.Setenv("EVENT_VALUE", paramValue)
