@@ -453,17 +453,12 @@ func setHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Publish to MQTT
-	if mqttClient == nil {
-		fmt.Println("MQTT is not configured")
-	}
 	if mqttClient != nil && mqttClient.IsConnected() {
 		token := mqttClient.Publish("sparcus/"+uri, 0, false, paramValue)
 		token.Wait()
 		if token.Error() != nil {
 			fmt.Println("Error publishing to MQTT:", token.Error())
 		}
-	} else {
-		fmt.Println("MQTT is not configured or not connected to server")
 	}
 
 	// Find scripts in handlers path
